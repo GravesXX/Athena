@@ -16,6 +16,7 @@ fi
 mkdir -p "$ATHENA_DATA"
 echo "Created data directory: $ATHENA_DATA"
 
+mkdir -p "$OPENCLAW_WORKSPACE"
 mkdir -p "$OPENCLAW_EXTENSIONS/athena"
 cd "$ATHENA_DIR/plugin"
 npm install

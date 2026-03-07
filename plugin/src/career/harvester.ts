@@ -61,7 +61,12 @@ export class Harvester {
   }
 
   applyHarvest(projectId: string, jsonResult: string): void {
-    const parsed: HarvestResult = JSON.parse(jsonResult);
+    let parsed: HarvestResult;
+    try {
+      parsed = JSON.parse(jsonResult);
+    } catch {
+      throw new Error('Failed to parse harvest results. Expected valid JSON.');
+    }
     for (const entry of parsed.achievements) {
       this.db.addAchievement(projectId, entry.category, entry.title, entry.description, [], entry.tags);
     }

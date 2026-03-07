@@ -103,7 +103,6 @@ athena/
 │   │   ├── index.ts
 │   │   ├── types.ts
 │   │   ├── db/
-│   │   │   ├── schema.sql
 │   │   │   ├── database.ts      # AthenaDB class
 │   │   │   └── __tests__/
 │   │   ├── projects/
