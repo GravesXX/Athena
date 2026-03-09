@@ -76,6 +76,14 @@ export interface Experience {
   updated_at: string;
 }
 
+export interface JobDescription {
+  id: string;
+  url: string;
+  raw_text: string;
+  analysis: string | null;
+  fetched_at: string;
+}
+
 export interface Resume {
   id: string;
   filename: string;
@@ -174,6 +182,14 @@ CREATE TABLE IF NOT EXISTS resumes (
   version_label TEXT,
   content TEXT NOT NULL,
   ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS job_descriptions (
+  id TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  analysis TEXT,
+  fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `;
 
@@ -500,5 +516,33 @@ export class AthenaDB {
 
   clearResumes(): void {
     this.db.prepare('DELETE FROM resumes').run();
+  }
+
+  // ── Job Descriptions ──────────────────────────────────────────────────
+
+  addJobDescription(url: string, rawText: string): JobDescription {
+    const id = uuidv4();
+    this.db
+      .prepare('INSERT INTO job_descriptions (id, url, raw_text) VALUES (?, ?, ?)')
+      .run(id, url, rawText);
+    return this.db.prepare('SELECT * FROM job_descriptions WHERE id = ?').get(id) as JobDescription;
+  }
+
+  getJobDescription(id: string): JobDescription | undefined {
+    return this.db.prepare('SELECT * FROM job_descriptions WHERE id = ?').get(id) as
+      | JobDescription
+      | undefined;
+  }
+
+  updateJobDescriptionAnalysis(id: string, analysis: string): void {
+    this.db
+      .prepare('UPDATE job_descriptions SET analysis = ? WHERE id = ?')
+      .run(analysis, id);
+  }
+
+  getAllJobDescriptions(): JobDescription[] {
+    return this.db
+      .prepare('SELECT * FROM job_descriptions ORDER BY fetched_at')
+      .all() as JobDescription[];
   }
 }

@@ -2,6 +2,7 @@ import { Harvester } from '../career/harvester.js';
 import { CareerCoach } from '../career/coach.js';
 import { ResumeEngine } from '../career/resume.js';
 import { ResumeIntake } from '../career/intake.js';
+import { ResumeTailor } from '../career/tailor.js';
 import type { PluginAPI } from '../types.js';
 import { text } from './helpers.js';
 
@@ -10,7 +11,8 @@ export function registerCareerTools(
   harvester: Harvester,
   coach: CareerCoach,
   resume: ResumeEngine,
-  intake: ResumeIntake
+  intake: ResumeIntake,
+  tailor: ResumeTailor
 ): void {
   api.registerTool({
     name: 'athena_harvest',
@@ -127,6 +129,66 @@ export function registerCareerTools(
     parameters: {},
     execute: async () => {
       return text(intake.clear());
+    },
+  });
+
+  // ── Resume Tailor Tools ───────────────────────────────────────────────
+
+  api.registerTool({
+    name: 'athena_jd_fetch',
+    description: 'Fetch a job description from a URL, extract text, and store it. Returns the JD text for analysis.',
+    parameters: {
+      url: { type: 'string', description: 'URL of the job posting', required: true },
+    },
+    execute: async (_id, params) => {
+      const result = await tailor.fetchJobDescription(params.url as string);
+      return text(result);
+    },
+  });
+
+  api.registerTool({
+    name: 'athena_jd_save_analysis',
+    description: 'Save a structured analysis of a job description (extracted requirements, skills, seniority level, etc.)',
+    parameters: {
+      jd_id: { type: 'string', description: 'ID of the job description', required: true },
+      analysis: { type: 'string', description: 'Structured analysis of the JD (skills, requirements, seniority, keywords)', required: true },
+    },
+    execute: async (_id, params) => {
+      return text(tailor.saveAnalysis(params.jd_id as string, params.analysis as string));
+    },
+  });
+
+  api.registerTool({
+    name: 'athena_resume_tailor',
+    description: 'Generate a tailored resume for a specific job description. Combines JD requirements with achievement bank and work experience.',
+    parameters: {
+      jd_id: { type: 'string', description: 'ID of the job description to tailor for', required: true },
+    },
+    execute: async (_id, params) => {
+      const prompt = tailor.buildTailorPrompt(params.jd_id as string);
+      return text({ content: prompt });
+    },
+  });
+
+  api.registerTool({
+    name: 'athena_resume_ats_check',
+    description: 'Check a tailored resume against the job description for ATS keyword match. Returns match rate and missing keywords.',
+    parameters: {
+      jd_id: { type: 'string', description: 'ID of the job description', required: true },
+      resume_text: { type: 'string', description: 'The tailored resume text to check', required: true },
+    },
+    execute: async (_id, params) => {
+      const prompt = tailor.buildAtsCheckPrompt(params.jd_id as string, params.resume_text as string);
+      return text({ content: prompt });
+    },
+  });
+
+  api.registerTool({
+    name: 'athena_jd_list',
+    description: 'List all fetched job descriptions with analysis status',
+    parameters: {},
+    execute: async () => {
+      return text(tailor.listJobDescriptions());
     },
   });
 }
