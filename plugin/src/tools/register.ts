@@ -8,6 +8,7 @@ import { CareerCoach } from '../career/coach.js';
 import { ResumeEngine } from '../career/resume.js';
 import { registerProjectTools } from './project-tools.js';
 import { registerCareerTools } from './career-tools.js';
+import { text } from './helpers.js';
 import type { PluginAPI } from '../types.js';
 
 export function registerAllTools(api: PluginAPI): void {
@@ -35,13 +36,13 @@ export function registerAllTools(api: PluginAPI): void {
       alternatives_json: { type: 'string', description: 'JSON array of {name, tradeoff} objects for alternatives' },
       reasoning: { type: 'string', description: 'Why this choice was made', required: true },
     },
-    run: async (params) => buildTools.recordDecision({
+    execute: async (_id, params) => text(buildTools.recordDecision({
       project_id: params.project_id as string,
       title: params.title as string,
       chosen: params.chosen as string,
       alternatives_json: (params.alternatives_json as string) || '[]',
       reasoning: params.reasoning as string,
-    }),
+    })),
   });
 
   api.registerTool({
@@ -52,11 +53,11 @@ export function registerAllTools(api: PluginAPI): void {
       title: { type: 'string', description: 'Task description', required: true },
       priority: { type: 'string', description: 'Priority: 1 (high), 2 (medium), 3 (low). Default: 2' },
     },
-    run: async (params) => buildTools.addTodo({
+    execute: async (_id, params) => text(buildTools.addTodo({
       project_id: params.project_id as string,
       title: params.title as string,
       priority: params.priority as string | undefined,
-    }),
+    })),
   });
 
   api.registerTool({
@@ -66,10 +67,10 @@ export function registerAllTools(api: PluginAPI): void {
       todo_id: { type: 'string', description: 'ID of the todo', required: true },
       status: { type: 'string', description: 'New status', required: true, enum: ['pending', 'in_progress', 'done'] },
     },
-    run: async (params) => buildTools.updateTodo({
+    execute: async (_id, params) => text(buildTools.updateTodo({
       todo_id: params.todo_id as string,
       status: params.status as string,
-    }),
+    })),
   });
 
   api.registerTool({
@@ -78,7 +79,7 @@ export function registerAllTools(api: PluginAPI): void {
     parameters: {
       project_id: { type: 'string', description: 'ID of the project', required: true },
     },
-    run: async (params) => buildTools.listTodos({ project_id: params.project_id as string }),
+    execute: async (_id, params) => text(buildTools.listTodos({ project_id: params.project_id as string })),
   });
 
   // ── Career Tools (5) ────────────────────────────────────────────────

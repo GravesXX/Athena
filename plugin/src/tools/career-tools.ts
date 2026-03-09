@@ -1,7 +1,8 @@
 import { Harvester } from '../career/harvester.js';
 import { CareerCoach } from '../career/coach.js';
 import { ResumeEngine } from '../career/resume.js';
-import type { PluginAPI, ToolResult } from '../types.js';
+import type { PluginAPI } from '../types.js';
+import { text } from './helpers.js';
 
 export function registerCareerTools(
   api: PluginAPI,
@@ -19,14 +20,14 @@ export function registerCareerTools(
         description: 'JSON string with harvest results (from Claude analysis). If not provided, returns a prompt to generate harvest data.',
       },
     },
-    run: async (params): Promise<ToolResult> => {
+    execute: async (_id, params) => {
       const projectId = params.project_id as string;
       if (params.harvest_json) {
         harvester.applyHarvest(projectId, params.harvest_json as string);
-        return { content: 'Harvest applied to achievement bank.' };
+        return text({ content: 'Harvest applied to achievement bank.' });
       }
       const prompt = harvester.buildHarvestPrompt(projectId);
-      return { content: prompt };
+      return text({ content: prompt });
     },
   });
 
@@ -37,10 +38,10 @@ export function registerCareerTools(
       category: { type: 'string', description: 'Filter by category', enum: ['skill', 'achievement', 'challenge', 'reflection'] },
       project_id: { type: 'string', description: 'Filter by project ID' },
     },
-    run: async (params) => coach.listAchievements({
+    execute: async (_id, params) => text(coach.listAchievements({
       category: params.category as string | undefined,
       project_id: params.project_id as string | undefined,
-    }),
+    })),
   });
 
   api.registerTool({
@@ -53,22 +54,22 @@ export function registerCareerTools(
       description: { type: 'string', description: 'What you did there', required: true },
       highlights_json: { type: 'string', description: 'JSON array of key accomplishments' },
     },
-    run: async (params) => coach.addExperience({
+    execute: async (_id, params) => text(coach.addExperience({
       company: params.company as string,
       role: params.role as string,
       period: params.period as string,
       description: params.description as string,
       highlights_json: params.highlights_json as string | undefined,
-    }),
+    })),
   });
 
   api.registerTool({
     name: 'athena_resume_generate',
     description: 'Generate a resume from your achievement bank and work experiences. Returns a prompt for Claude to produce the resume.',
     parameters: {},
-    run: async (): Promise<ToolResult> => {
+    execute: async (_id, _params) => {
       const prompt = resume.buildGeneratePrompt();
-      return { content: prompt };
+      return text({ content: prompt });
     },
   });
 
@@ -78,9 +79,9 @@ export function registerCareerTools(
     parameters: {
       resume_text: { type: 'string', description: 'The resume text to review', required: true },
     },
-    run: async (params): Promise<ToolResult> => {
+    execute: async (_id, params) => {
       const prompt = resume.buildReviewPrompt(params.resume_text as string);
-      return { content: prompt };
+      return text({ content: prompt });
     },
   });
 }
