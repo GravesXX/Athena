@@ -1,6 +1,7 @@
 import { Harvester } from '../career/harvester.js';
 import { CareerCoach } from '../career/coach.js';
 import { ResumeEngine } from '../career/resume.js';
+import { ResumeIntake } from '../career/intake.js';
 import type { PluginAPI } from '../types.js';
 import { text } from './helpers.js';
 
@@ -8,7 +9,8 @@ export function registerCareerTools(
   api: PluginAPI,
   harvester: Harvester,
   coach: CareerCoach,
-  resume: ResumeEngine
+  resume: ResumeEngine,
+  intake: ResumeIntake
 ): void {
   api.registerTool({
     name: 'athena_harvest',
@@ -82,6 +84,49 @@ export function registerCareerTools(
     execute: async (_id, params) => {
       const prompt = resume.buildReviewPrompt(params.resume_text as string);
       return text({ content: prompt });
+    },
+  });
+
+  // ── Resume Intake Tools ─────────────────────────────────────────────
+
+  api.registerTool({
+    name: 'athena_resume_ingest',
+    description: 'Read resume files from a path (file or directory), store them, and return all resume contents for analysis. Supports .txt, .md, .pdf files.',
+    parameters: {
+      path: { type: 'string', description: 'Absolute path to a resume file or directory containing resumes', required: true },
+      version_label: { type: 'string', description: 'Label for this resume version, e.g. "SWE March 2025" or "PM Fall 2024"' },
+    },
+    execute: async (_id, params) => {
+      return text(intake.ingest(params.path as string, params.version_label as string | undefined));
+    },
+  });
+
+  api.registerTool({
+    name: 'athena_resume_intake_list',
+    description: 'List all ingested resumes with metadata (filename, label, size, date)',
+    parameters: {},
+    execute: async () => {
+      return text({ content: intake.list().content });
+    },
+  });
+
+  api.registerTool({
+    name: 'athena_resume_intake_analyze',
+    description: 'Load all ingested resume contents for cross-version analysis. Returns full text of every resume.',
+    parameters: {},
+    execute: async () => {
+      const result = intake.getAllContent();
+      if (result.error) return text(result);
+      return text({ content: result.content });
+    },
+  });
+
+  api.registerTool({
+    name: 'athena_resume_intake_clear',
+    description: 'Clear all ingested resumes from the bank (fresh start)',
+    parameters: {},
+    execute: async () => {
+      return text(intake.clear());
     },
   });
 }

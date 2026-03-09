@@ -76,6 +76,14 @@ export interface Experience {
   updated_at: string;
 }
 
+export interface Resume {
+  id: string;
+  filename: string;
+  version_label: string | null;
+  content: string;
+  ingested_at: string;
+}
+
 // ── Schema ──────────────────────────────────────────────────────────────────
 
 const SCHEMA = `
@@ -159,6 +167,14 @@ CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_id);
 CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
 CREATE INDEX IF NOT EXISTS idx_achievements_project ON achievements(project_id);
 CREATE INDEX IF NOT EXISTS idx_achievements_category ON achievements(category);
+
+CREATE TABLE IF NOT EXISTS resumes (
+  id TEXT PRIMARY KEY,
+  filename TEXT NOT NULL,
+  version_label TEXT,
+  content TEXT NOT NULL,
+  ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 // ── Phase Order ─────────────────────────────────────────────────────────────
@@ -459,5 +475,30 @@ export class AthenaDB {
       .prepare('SELECT COUNT(*) as count FROM achievements')
       .get() as { count: number };
     return row.count;
+  }
+
+  // ── Resumes ──────────────────────────────────────────────────────────
+
+  addResume(filename: string, content: string, versionLabel?: string): Resume {
+    const id = uuidv4();
+    this.db
+      .prepare('INSERT INTO resumes (id, filename, content, version_label) VALUES (?, ?, ?, ?)')
+      .run(id, filename, content, versionLabel ?? null);
+    return this.db.prepare('SELECT * FROM resumes WHERE id = ?').get(id) as Resume;
+  }
+
+  getAllResumes(): Resume[] {
+    return this.db.prepare('SELECT * FROM resumes ORDER BY ingested_at').all() as Resume[];
+  }
+
+  getResumeCount(): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) as count FROM resumes')
+      .get() as { count: number };
+    return row.count;
+  }
+
+  clearResumes(): void {
+    this.db.prepare('DELETE FROM resumes').run();
   }
 }

@@ -6,6 +6,7 @@ import { BuildTools } from './build-tools.js';
 import { Harvester } from '../career/harvester.js';
 import { CareerCoach } from '../career/coach.js';
 import { ResumeEngine } from '../career/resume.js';
+import { ResumeIntake } from '../career/intake.js';
 import { registerProjectTools } from './project-tools.js';
 import { registerCareerTools } from './career-tools.js';
 import { text } from './helpers.js';
@@ -20,6 +21,7 @@ export function registerAllTools(api: PluginAPI): void {
   const harvester = new Harvester(db);
   const coach = new CareerCoach(db);
   const resume = new ResumeEngine(db);
+  const intake = new ResumeIntake(db);
 
   // ── Project Tools (5) ───────────────────────────────────────────────
   registerProjectTools(api, manager);
@@ -82,6 +84,6 @@ export function registerAllTools(api: PluginAPI): void {
     execute: async (_id, params) => text(buildTools.listTodos({ project_id: params.project_id as string })),
   });
 
-  // ── Career Tools (5) ────────────────────────────────────────────────
-  registerCareerTools(api, harvester, coach, resume);
+  // ── Career Tools (9) ────────────────────────────────────────────────
+  registerCareerTools(api, harvester, coach, resume, intake);
 }
