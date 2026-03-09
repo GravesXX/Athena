@@ -1,10 +1,10 @@
 {
   "id": "athena",
   "name": "Athena - Strategic Career Engineer",
-  "version": "0.1.0",
-  "description": "Career-focused agent with project lifecycle management, achievement tracking, and resume generation",
+  "version": "0.2.0",
+  "description": "Career-focused agent with project lifecycle management, achievement tracking, resume intake and tailoring with ATS optimization",
   "entry": "src/index.ts",
-  "skills": ["skills"],
+  "skills": ["src/skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

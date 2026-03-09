@@ -25,9 +25,6 @@ cp openclaw.plugin.json "$OPENCLAW_EXTENSIONS/athena/"
 cp package.json "$OPENCLAW_EXTENSIONS/athena/"
 cp tsconfig.json "$OPENCLAW_EXTENSIONS/athena/"
 cp -r node_modules/ "$OPENCLAW_EXTENSIONS/athena/node_modules/"
-if [ -d "skills" ]; then
-  cp -r skills/ "$OPENCLAW_EXTENSIONS/athena/skills/"
-fi
 echo "Installed plugin to: $OPENCLAW_EXTENSIONS/athena"
 
 for file in SOUL.md AGENTS.md IDENTITY.md USER.md RESUME_KNOWLEDGE.md; do

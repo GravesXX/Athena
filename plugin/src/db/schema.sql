@@ -72,6 +72,22 @@ CREATE TABLE IF NOT EXISTS experiences (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS resumes (
+  id TEXT PRIMARY KEY,
+  filename TEXT NOT NULL,
+  version_label TEXT,
+  content TEXT NOT NULL,
+  ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS job_descriptions (
+  id TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  analysis TEXT,
+  fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_id);

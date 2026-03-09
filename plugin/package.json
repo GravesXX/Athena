@@ -1,6 +1,6 @@
 {
   "name": "athena-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Athena — strategic career engineer agent for OpenClaw",
   "main": "index.js",
   "scripts": {

@@ -21,6 +21,8 @@ OpenClaw (Gateway + Discord/Telegram/WebChat)
         ├── Harvester ─────────── extracts skills/achievements/reflections after work
         ├── Career Coach ──────── analyzes experiences through recruiter's lens
         ├── Resume Engine ────── generates + polishes resumes from real data
+        ├── Resume Intake ────── multi-version resume ingestion + career evolution analysis
+        ├── Resume Tailor ────── JD-targeted resume generation + ATS keyword matching
         └── SQLite (~/.athena/athena.db)
 ```
 
@@ -51,6 +53,8 @@ Not tied to any project. Consumes accumulated harvest data plus manually-added p
 - **Experience coaching** — discuss past roles, reframe through what hiring managers care about
 - **Achievement bank** — living database of skills, accomplishments, challenges across all projects
 - **Resume craft** — generate and polish resumes grounded in real data, guided by built-in knowledge base
+- **Resume intake** — ingest multiple resume versions, analyze career evolution, conduct tailored interviews
+- **Resume tailoring** — fetch job descriptions, extract requirements, generate JD-specific resumes with ATS optimization
 
 ## Data Model
 
@@ -146,7 +150,31 @@ Past work experiences for career coaching and resume generation.
 | created_at | TEXT | ISO datetime |
 | updated_at | TEXT | ISO datetime |
 
-## Tools (14)
+### resumes
+Ingested resume versions for cross-version analysis.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | TEXT PK | UUID |
+| filename | TEXT | Original filename |
+| version_label | TEXT | User label, e.g. "SWE March 2025" (nullable) |
+| content | TEXT | Full text content of the resume |
+| ingested_at | TEXT | ISO datetime |
+
+### job_descriptions
+Fetched job descriptions with extracted requirements.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | TEXT PK | UUID |
+| url | TEXT | Source URL of the job posting |
+| raw_text | TEXT | Extracted plain text from the page |
+| analysis | TEXT | Structured analysis of requirements (nullable) |
+| fetched_at | TEXT | ISO datetime |
+
+## Tools (23)
+
+### Project Tools (5)
 
 | # | Tool | Description |
 |---|------|-------------|
@@ -155,15 +183,44 @@ Past work experiences for career coaching and resume generation.
 | 3 | `athena_project_open` | Switch active project (or enter career mode with no project) |
 | 4 | `athena_project_advance` | Advance project to next phase |
 | 5 | `athena_project_scan` | Scan linked directory — git log, README, package.json, tech stack, file structure |
+
+### Build Tools (4)
+
+| # | Tool | Description |
+|---|------|-------------|
 | 6 | `athena_decision_record` | Record a decision with chosen approach, alternatives, reasoning |
 | 7 | `athena_todo_add` | Add a todo item to active project |
 | 8 | `athena_todo_update` | Update todo status |
 | 9 | `athena_todo_list` | List todos for active project |
+
+### Career Tools (5)
+
+| # | Tool | Description |
+|---|------|-------------|
 | 10 | `athena_harvest` | Extract skills/achievements/challenges/reflections from a project |
 | 11 | `athena_achievement_list` | Query the achievement bank (filter by project, category, tags) |
 | 12 | `athena_experience_add` | Add a past work experience |
 | 13 | `athena_resume_generate` | Generate a resume from achievements + experiences |
 | 14 | `athena_resume_review` | Review and polish a resume against best practices |
+
+### Resume Intake Tools (4)
+
+| # | Tool | Description |
+|---|------|-------------|
+| 15 | `athena_resume_ingest` | Read resume files (.txt, .md, .pdf) from a path and store them |
+| 16 | `athena_resume_intake_list` | List ingested resumes with metadata |
+| 17 | `athena_resume_intake_analyze` | Load all resume contents for cross-version analysis |
+| 18 | `athena_resume_intake_clear` | Clear all ingested resumes |
+
+### Resume Tailor Tools (5)
+
+| # | Tool | Description |
+|---|------|-------------|
+| 19 | `athena_jd_fetch` | Fetch a job description from URL and extract text |
+| 20 | `athena_jd_save_analysis` | Save structured analysis of JD requirements |
+| 21 | `athena_resume_tailor` | Generate a resume tailored to a specific JD |
+| 22 | `athena_resume_ats_check` | Check resume against JD for ATS keyword match |
+| 23 | `athena_jd_list` | List previously fetched job descriptions |
 
 ## Persona
 
@@ -214,8 +271,9 @@ athena/
 │   ├── src/
 │   │   ├── index.ts
 │   │   ├── types.ts
+│   │   ├── openclaw.plugin.json
 │   │   ├── db/
-│   │   │   ├── schema.sql
+│   │   │   ├── schema.sql       # Raw SQL schema (9 tables)
 │   │   │   ├── database.ts      # AthenaDB class
 │   │   │   └── __tests__/
 │   │   ├── projects/
@@ -225,17 +283,23 @@ athena/
 │   │   │   ├── harvester.ts     # Achievement extraction
 │   │   │   ├── coach.ts         # Experience analysis
 │   │   │   ├── resume.ts        # Resume generation + review
+│   │   │   ├── intake.ts        # Multi-version resume ingestion
+│   │   │   ├── tailor.ts        # JD-targeted resume tailoring + ATS
 │   │   │   └── __tests__/
-│   │   └── tools/
-│   │       ├── register.ts      # Registers all 14 tools
-│   │       ├── project-tools.ts
-│   │       ├── build-tools.ts
-│   │       ├── career-tools.ts
-│   │       └── __tests__/
-│   └── skills/
-│       ├── project/SKILL.md     # /project slash command
-│       ├── harvest/SKILL.md     # /harvest slash command
-│       └── resume/SKILL.md      # /resume slash command
+│   │   ├── tools/
+│   │   │   ├── register.ts      # Registers all 23 tools
+│   │   │   ├── project-tools.ts # 5 project tools
+│   │   │   ├── build-tools.ts   # 4 build tools
+│   │   │   ├── career-tools.ts  # 14 career tools
+│   │   │   ├── helpers.ts       # MCP result helpers
+│   │   │   └── __tests__/
+│   │   └── skills/
+│   │       ├── project/SKILL.md  # /project slash command
+│   │       ├── harvest/SKILL.md  # /harvest slash command
+│   │       ├── resume/SKILL.md   # /resume slash command
+│   │       ├── intake/SKILL.md   # /intake slash command
+│   │       └── tailor/SKILL.md   # /tailor slash command
+│   └── dist/                     # Compiled JS output
 └── docs/
     └── plans/
 ```
