@@ -14,8 +14,8 @@ import { text } from './helpers.js';
 import type { PluginAPI } from '../types.js';
 
 export function registerAllTools(api: PluginAPI): void {
-  const dbPath = path.join(os.homedir(), '.athena', 'athena.db');
-  const db = new AthenaDB(dbPath);
+  const vaultPath = path.join(os.homedir(), 'Documents', 'Obsidian Vault');
+  const db = new AthenaDB(vaultPath);
 
   const manager = new ProjectManager(db);
   const buildTools = new BuildTools(db);

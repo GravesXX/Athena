@@ -1,7 +1,5 @@
-import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs';
-import path from 'path';
+import { ObsidianAdapter } from 'obsidian-adapter';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -92,106 +90,38 @@ export interface Resume {
   ingested_at: string;
 }
 
-// ── Schema ──────────────────────────────────────────────────────────────────
+// ── Message parsing helpers ─────────────────────────────────────────────────
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL,
-  directory TEXT,
-  phase TEXT NOT NULL DEFAULT 'explore'
-    CHECK (phase IN ('explore', 'build', 'harvest', 'completed')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+const MSG_TAG_RE = /<!-- msg:([^:]+):deleted=(\d) -->/;
 
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  project_id TEXT REFERENCES projects(id),
-  phase TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  summary TEXT
-);
+function formatMessage(msg: Message): string {
+  return `### ${msg.created_at} — ${msg.role}\n${msg.content}\n<!-- msg:${msg.id}:deleted=${msg.is_deleted} -->`;
+}
 
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL REFERENCES sessions(id),
-  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-  content TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  is_deleted INTEGER NOT NULL DEFAULT 0
-);
+function parseMessages(body: string, sessionId: string): Message[] {
+  const messages: Message[] = [];
+  const blocks = body.split(/(?=^### \d{4}-)/m);
 
-CREATE TABLE IF NOT EXISTS decisions (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id),
-  title TEXT NOT NULL,
-  chosen TEXT NOT NULL,
-  alternatives TEXT DEFAULT '[]',
-  reasoning TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+  for (const block of blocks) {
+    const headerMatch = block.match(/^### (\S+) — (\S+)\n/);
+    const tagMatch = block.match(MSG_TAG_RE);
+    if (!headerMatch || !tagMatch) continue;
 
-CREATE TABLE IF NOT EXISTS todos (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id),
-  title TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'in_progress', 'done')),
-  priority INTEGER NOT NULL DEFAULT 2,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  completed_at TEXT
-);
+    const contentStart = block.indexOf('\n') + 1;
+    const contentEnd = block.lastIndexOf('<!-- msg:');
+    const content = block.slice(contentStart, contentEnd).trim();
 
-CREATE TABLE IF NOT EXISTS achievements (
-  id TEXT PRIMARY KEY,
-  project_id TEXT REFERENCES projects(id),
-  category TEXT NOT NULL
-    CHECK (category IN ('skill', 'achievement', 'challenge', 'reflection')),
-  title TEXT NOT NULL,
-  description TEXT NOT NULL,
-  evidence TEXT DEFAULT '[]',
-  tags TEXT DEFAULT '[]',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS experiences (
-  id TEXT PRIMARY KEY,
-  company TEXT NOT NULL,
-  role TEXT NOT NULL,
-  period TEXT NOT NULL,
-  description TEXT NOT NULL,
-  highlights TEXT DEFAULT '[]',
-  recruiter_insights TEXT DEFAULT '[]',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
-CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_id);
-CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project_id);
-CREATE INDEX IF NOT EXISTS idx_achievements_project ON achievements(project_id);
-CREATE INDEX IF NOT EXISTS idx_achievements_category ON achievements(category);
-
-CREATE TABLE IF NOT EXISTS resumes (
-  id TEXT PRIMARY KEY,
-  filename TEXT NOT NULL,
-  version_label TEXT,
-  content TEXT NOT NULL,
-  ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS job_descriptions (
-  id TEXT PRIMARY KEY,
-  url TEXT NOT NULL,
-  raw_text TEXT NOT NULL,
-  analysis TEXT,
-  fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-`;
+    messages.push({
+      id: tagMatch[1],
+      session_id: sessionId,
+      role: headerMatch[2],
+      content,
+      created_at: headerMatch[1],
+      is_deleted: parseInt(tagMatch[2], 10),
+    });
+  }
+  return messages;
+}
 
 // ── Phase Order ─────────────────────────────────────────────────────────────
 
@@ -200,57 +130,69 @@ const PHASE_ORDER = ['explore', 'build', 'harvest', 'completed'] as const;
 // ── AthenaDB Class ──────────────────────────────────────────────────────────
 
 export class AthenaDB {
-  private db: Database.Database;
+  private adapter: ObsidianAdapter;
 
-  constructor(dbPath: string) {
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+  constructor(vaultPath: string) {
+    this.adapter = new ObsidianAdapter(vaultPath, 'Agents/Athena');
 
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
-    this.db.exec(SCHEMA);
+    // Ensure required folders exist
+    this.adapter.ensureFolder('Projects');
+    this.adapter.ensureFolder('Decisions');
+    this.adapter.ensureFolder('Todos');
+    this.adapter.ensureFolder('Achievements');
+    this.adapter.ensureFolder('Experiences');
+    this.adapter.ensureFolder('Resumes');
+    this.adapter.ensureFolder('Job Descriptions');
   }
+
+  // ── Lifecycle ───────────────────────────────────────────────────────────
 
   close(): void {
-    this.db.close();
+    // No-op for Obsidian adapter
   }
 
+  // ── Introspection ───────────────────────────────────────────────────────
+
   listTables(): string[] {
-    const rows = this.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-      .all() as { name: string }[];
-    return rows.map((r) => r.name);
+    return ['projects', 'sessions', 'messages', 'decisions', 'todos', 'achievements', 'experiences', 'resumes', 'job_descriptions'];
   }
 
   // ── Projects ────────────────────────────────────────────────────────────
 
   createProject(name: string, description: string, directory?: string): Project {
     const id = uuidv4();
-    this.db
-      .prepare(
-        'INSERT INTO projects (id, name, description, directory) VALUES (?, ?, ?, ?)'
-      )
-      .run(id, name, description, directory ?? null);
+    const now = new Date().toISOString();
+    const filename = `${this.adapter.sanitize(name)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote('Projects', filename, {
+      id,
+      type: 'athena-project',
+      name,
+      directory: directory ?? null,
+      phase: 'explore',
+      created_at: now,
+      updated_at: now,
+      tags: ['athena', 'project'],
+    }, `# ${name}\n\n${description}\n`);
+
     return this.getProject(id)!;
   }
 
   getProject(id: string): Project | undefined {
-    return this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as
-      | Project
-      | undefined;
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-project') return undefined;
+    return this.projectFromEntry(entry);
   }
 
   getProjectsByPhase(phase: string): Project[] {
-    return this.db
-      .prepare('SELECT * FROM projects WHERE phase = ?')
-      .all(phase) as Project[];
+    return this.adapter.findByType('athena-project')
+      .filter(e => e.frontmatter.phase === phase)
+      .map(e => this.projectFromEntry(e));
   }
 
   getAllProjects(): Project[] {
-    return this.db.prepare('SELECT * FROM projects').all() as Project[];
+    return this.adapter.findByType('athena-project')
+      .map(e => this.projectFromEntry(e));
   }
 
   advancePhase(id: string): void {
@@ -263,69 +205,120 @@ export class AthenaDB {
     if (currentIndex < 0 || currentIndex >= PHASE_ORDER.length - 1) return;
 
     const nextPhase = PHASE_ORDER[currentIndex + 1];
-    this.db
-      .prepare(
-        "UPDATE projects SET phase = ?, updated_at = datetime('now') WHERE id = ?"
-      )
-      .run(nextPhase, id);
+    const entry = this.adapter.findById(id);
+    if (!entry) return;
+
+    this.adapter.updateFrontmatter(entry.relativePath, {
+      phase: nextPhase,
+      updated_at: new Date().toISOString(),
+    });
   }
 
   updateProjectDirectory(id: string, directory: string): void {
-    this.db
-      .prepare(
-        "UPDATE projects SET directory = ?, updated_at = datetime('now') WHERE id = ?"
-      )
-      .run(directory, id);
+    const entry = this.adapter.findById(id);
+    if (!entry) return;
+
+    this.adapter.updateFrontmatter(entry.relativePath, {
+      directory,
+      updated_at: new Date().toISOString(),
+    });
   }
 
   // ── Sessions ────────────────────────────────────────────────────────────
+  // Sessions are stored as notes inside the project folder (or a Career folder
+  // for career sessions). Messages are inline in the session note body.
 
   createSession(projectId: string | null, phase: string): Session {
     const id = uuidv4();
-    this.db
-      .prepare('INSERT INTO sessions (id, project_id, phase) VALUES (?, ?, ?)')
-      .run(id, projectId, phase);
-    return this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Session;
+    const now = new Date().toISOString();
+
+    let folder: string;
+    let titlePrefix: string;
+    if (projectId) {
+      const project = this.getProject(projectId);
+      const projectName = project ? this.adapter.sanitize(project.name) : projectId.slice(0, 8);
+      folder = `Projects/${projectName}`;
+      titlePrefix = `Session ${phase}`;
+    } else {
+      folder = 'Projects/Career';
+      titlePrefix = `Career Session`;
+    }
+
+    this.adapter.ensureFolder(folder);
+    const filename = `${this.adapter.sanitize(titlePrefix)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote(folder, filename, {
+      id,
+      type: 'athena-session',
+      project_id: projectId,
+      phase,
+      created_at: now,
+      updated_at: now,
+      summary: null,
+      tags: ['athena', 'session'],
+    }, `# ${titlePrefix}\n\n## Conversation\n`);
+
+    return this.getSession(id)!;
+  }
+
+  private getSession(id: string): Session | undefined {
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-session') return undefined;
+    return this.sessionFromEntry(entry);
   }
 
   getSessionsForProject(projectId: string): Session[] {
-    return this.db
-      .prepare('SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at')
-      .all(projectId) as Session[];
+    return this.adapter.findByType('athena-session')
+      .filter(e => e.frontmatter.project_id === projectId)
+      .map(e => this.sessionFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
   getCareerSessions(): Session[] {
-    return this.db
-      .prepare("SELECT * FROM sessions WHERE project_id IS NULL AND phase = 'career' ORDER BY created_at")
-      .all() as Session[];
+    return this.adapter.findByType('athena-session')
+      .filter(e => e.frontmatter.project_id === null && e.frontmatter.phase === 'career')
+      .map(e => this.sessionFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
   updateSessionSummary(id: string, summary: string): void {
-    this.db
-      .prepare(
-        "UPDATE sessions SET summary = ?, updated_at = datetime('now') WHERE id = ?"
-      )
-      .run(summary, id);
+    const entry = this.adapter.findById(id);
+    if (!entry) return;
+
+    this.adapter.updateFrontmatter(entry.relativePath, {
+      summary,
+      updated_at: new Date().toISOString(),
+    });
   }
 
   // ── Messages ────────────────────────────────────────────────────────────
 
   addMessage(sessionId: string, role: string, content: string): Message {
     const id = uuidv4();
-    this.db
-      .prepare(
-        'INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)'
-      )
-      .run(id, sessionId, role, content);
-    return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as Message;
+    const now = new Date().toISOString();
+    const msg: Message = { id, session_id: sessionId, role, content, created_at: now, is_deleted: 0 };
+
+    const entry = this.adapter.findById(sessionId);
+    if (!entry) throw new Error(`Session ${sessionId} not found`);
+
+    this.adapter.appendToBody(entry.relativePath, formatMessage(msg));
+
+    // Update session timestamp
+    this.adapter.updateFrontmatter(entry.relativePath, {
+      updated_at: now,
+    });
+
+    return msg;
   }
 
   getSessionMessages(sessionId: string): Message[] {
-    return this.db
-      .prepare(
-        'SELECT * FROM messages WHERE session_id = ? AND is_deleted = 0 ORDER BY created_at'
-      )
-      .all(sessionId) as Message[];
+    const entry = this.adapter.findById(sessionId);
+    if (!entry) return [];
+
+    const note = this.adapter.readNote(entry.relativePath);
+    if (!note) return [];
+
+    return parseMessages(note.body, sessionId).filter(m => m.is_deleted === 0);
   }
 
   // ── Decisions ───────────────────────────────────────────────────────────
@@ -338,53 +331,120 @@ export class AthenaDB {
     reasoning: string
   ): Decision {
     const id = uuidv4();
-    this.db
-      .prepare(
-        'INSERT INTO decisions (id, project_id, title, chosen, alternatives, reasoning) VALUES (?, ?, ?, ?, ?, ?)'
-      )
-      .run(id, projectId, title, chosen, JSON.stringify(alternatives), reasoning);
-    return this.db.prepare('SELECT * FROM decisions WHERE id = ?').get(id) as Decision;
+    const now = new Date().toISOString();
+
+    const project = this.getProject(projectId);
+    const projectName = project ? this.adapter.sanitize(project.name) : projectId.slice(0, 8);
+    const folder = `Decisions/${projectName}`;
+    this.adapter.ensureFolder(folder);
+
+    const filename = `${this.adapter.sanitize(title)} - ${this.adapter.shortId(id)}.md`;
+    const alternativesStr = JSON.stringify(alternatives);
+
+    this.adapter.createNote(folder, filename, {
+      id,
+      type: 'athena-decision',
+      project_id: projectId,
+      title,
+      chosen,
+      alternatives: alternativesStr,
+      created_at: now,
+      tags: ['athena', 'decision'],
+    }, `# ${title}\n\n## Chosen\n${chosen}\n\n## Alternatives\n${alternativesStr}\n\n## Reasoning\n${reasoning}\n`);
+
+    return this.getDecision(id)!;
+  }
+
+  private getDecision(id: string): Decision | undefined {
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-decision') return undefined;
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    const reasoningMatch = note?.body.match(/## Reasoning\n([\s\S]*?)$/);
+    return {
+      id: fm.id as string,
+      project_id: fm.project_id as string,
+      title: fm.title as string,
+      chosen: fm.chosen as string,
+      alternatives: fm.alternatives as string,
+      reasoning: reasoningMatch?.[1]?.trim() ?? '',
+      created_at: fm.created_at as string,
+    };
   }
 
   getDecisions(projectId: string): Decision[] {
-    return this.db
-      .prepare('SELECT * FROM decisions WHERE project_id = ? ORDER BY created_at')
-      .all(projectId) as Decision[];
+    return this.adapter.findByType('athena-decision')
+      .filter(e => e.frontmatter.project_id === projectId)
+      .map(e => {
+        const fm = e.frontmatter;
+        const note = this.adapter.readNote(e.relativePath);
+        const reasoningMatch = note?.body.match(/## Reasoning\n([\s\S]*?)$/);
+        return {
+          id: fm.id as string,
+          project_id: fm.project_id as string,
+          title: fm.title as string,
+          chosen: fm.chosen as string,
+          alternatives: fm.alternatives as string,
+          reasoning: reasoningMatch?.[1]?.trim() ?? '',
+          created_at: fm.created_at as string,
+        };
+      })
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
   // ── Todos ───────────────────────────────────────────────────────────────
 
   addTodo(projectId: string, title: string, priority: number): Todo {
     const id = uuidv4();
-    this.db
-      .prepare(
-        'INSERT INTO todos (id, project_id, title, priority) VALUES (?, ?, ?, ?)'
-      )
-      .run(id, projectId, title, priority);
-    return this.db.prepare('SELECT * FROM todos WHERE id = ?').get(id) as Todo;
+    const now = new Date().toISOString();
+
+    const project = this.getProject(projectId);
+    const projectName = project ? this.adapter.sanitize(project.name) : projectId.slice(0, 8);
+    const folder = `Todos/${projectName}`;
+    this.adapter.ensureFolder(folder);
+
+    const filename = `${this.adapter.sanitize(title)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote(folder, filename, {
+      id,
+      type: 'athena-todo',
+      project_id: projectId,
+      title,
+      status: 'pending',
+      priority,
+      created_at: now,
+      completed_at: null,
+      tags: ['athena', 'todo'],
+    }, `# ${title}\n`);
+
+    return this.getTodo(id)!;
   }
 
   getTodo(id: string): Todo | undefined {
-    return this.db.prepare('SELECT * FROM todos WHERE id = ?').get(id) as
-      | Todo
-      | undefined;
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-todo') return undefined;
+    return this.todoFromEntry(entry);
   }
 
   getTodos(projectId: string): Todo[] {
-    return this.db
-      .prepare(
-        'SELECT * FROM todos WHERE project_id = ? ORDER BY priority, created_at'
-      )
-      .all(projectId) as Todo[];
+    return this.adapter.findByType('athena-todo')
+      .filter(e => e.frontmatter.project_id === projectId)
+      .map(e => this.todoFromEntry(e))
+      .sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return a.created_at.localeCompare(b.created_at);
+      });
   }
 
   updateTodoStatus(id: string, status: string): void {
+    const entry = this.adapter.findById(id);
+    if (!entry) return;
+
     const completedAt = status === 'done' ? new Date().toISOString() : null;
-    this.db
-      .prepare(
-        'UPDATE todos SET status = ?, completed_at = ? WHERE id = ?'
-      )
-      .run(status, completedAt, id);
+    this.adapter.updateFrontmatter(entry.relativePath, {
+      status,
+      completed_at: completedAt,
+    });
   }
 
   // ── Achievements ────────────────────────────────────────────────────────
@@ -398,40 +458,52 @@ export class AthenaDB {
     tags: string[]
   ): Achievement {
     const id = uuidv4();
-    this.db
-      .prepare(
-        'INSERT INTO achievements (id, project_id, category, title, description, evidence, tags) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        id,
-        projectId,
-        category,
-        title,
-        description,
-        JSON.stringify(evidence),
-        JSON.stringify(tags)
-      );
-    return this.db
-      .prepare('SELECT * FROM achievements WHERE id = ?')
-      .get(id) as Achievement;
+    const now = new Date().toISOString();
+
+    const folder = `Achievements/${this.adapter.sanitize(category)}`;
+    this.adapter.ensureFolder(folder);
+
+    const filename = `${this.adapter.sanitize(title)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote(folder, filename, {
+      id,
+      type: 'athena-achievement',
+      project_id: projectId,
+      category,
+      title,
+      evidence: JSON.stringify(evidence),
+      achievement_tags: JSON.stringify(tags),
+      created_at: now,
+      tags: ['athena', 'achievement'],
+    }, `# ${title}\n\n${description}\n`);
+
+    return this.getAchievement(id)!;
+  }
+
+  private getAchievement(id: string): Achievement | undefined {
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-achievement') return undefined;
+    return this.achievementFromEntry(entry);
   }
 
   getAchievementsByCategory(category: string): Achievement[] {
-    return this.db
-      .prepare('SELECT * FROM achievements WHERE category = ? ORDER BY created_at')
-      .all(category) as Achievement[];
+    return this.adapter.findByType('athena-achievement')
+      .filter(e => e.frontmatter.category === category)
+      .map(e => this.achievementFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
   getAchievementsForProject(projectId: string): Achievement[] {
-    return this.db
-      .prepare('SELECT * FROM achievements WHERE project_id = ? ORDER BY created_at')
-      .all(projectId) as Achievement[];
+    return this.adapter.findByType('athena-achievement')
+      .filter(e => e.frontmatter.project_id === projectId)
+      .map(e => this.achievementFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
   getAllAchievements(): Achievement[] {
-    return this.db
-      .prepare('SELECT * FROM achievements ORDER BY created_at')
-      .all() as Achievement[];
+    return this.adapter.findByType('athena-achievement')
+      .map(e => this.achievementFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
   // ── Experiences ─────────────────────────────────────────────────────────
@@ -445,104 +517,332 @@ export class AthenaDB {
     recruiterInsights: string[]
   ): Experience {
     const id = uuidv4();
-    this.db
-      .prepare(
-        'INSERT INTO experiences (id, company, role, period, description, highlights, recruiter_insights) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        id,
-        company,
-        role,
-        period,
-        description,
-        JSON.stringify(highlights),
-        JSON.stringify(recruiterInsights)
-      );
-    return this.db
-      .prepare('SELECT * FROM experiences WHERE id = ?')
-      .get(id) as Experience;
+    const now = new Date().toISOString();
+
+    const filename = `${this.adapter.sanitize(company)} - ${this.adapter.sanitize(role)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote('Experiences', filename, {
+      id,
+      type: 'athena-experience',
+      company,
+      role,
+      period,
+      highlights: JSON.stringify(highlights),
+      recruiter_insights: JSON.stringify(recruiterInsights),
+      created_at: now,
+      updated_at: now,
+      tags: ['athena', 'experience'],
+    }, `# ${company} — ${role}\n\n**Period:** ${period}\n\n${description}\n`);
+
+    return this.getExperience(id)!;
+  }
+
+  private getExperience(id: string): Experience | undefined {
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-experience') return undefined;
+    return this.experienceFromEntry(entry);
   }
 
   getAllExperiences(): Experience[] {
-    return this.db
-      .prepare('SELECT * FROM experiences ORDER BY created_at')
-      .all() as Experience[];
+    return this.adapter.findByType('athena-experience')
+      .map(e => this.experienceFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
   updateExperienceInsights(id: string, insights: string[]): void {
-    this.db
-      .prepare(
-        "UPDATE experiences SET recruiter_insights = ?, updated_at = datetime('now') WHERE id = ?"
-      )
-      .run(JSON.stringify(insights), id);
+    const entry = this.adapter.findById(id);
+    if (!entry) return;
+
+    this.adapter.updateFrontmatter(entry.relativePath, {
+      recruiter_insights: JSON.stringify(insights),
+      updated_at: new Date().toISOString(),
+    });
   }
 
   // ── Stats ───────────────────────────────────────────────────────────────
 
   getProjectCount(): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as count FROM projects')
-      .get() as { count: number };
-    return row.count;
+    return this.adapter.findByType('athena-project').length;
   }
 
   getAchievementCount(): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as count FROM achievements')
-      .get() as { count: number };
-    return row.count;
+    return this.adapter.findByType('athena-achievement').length;
   }
 
   // ── Resumes ──────────────────────────────────────────────────────────
 
   addResume(filename: string, content: string, versionLabel?: string): Resume {
     const id = uuidv4();
-    this.db
-      .prepare('INSERT INTO resumes (id, filename, content, version_label) VALUES (?, ?, ?, ?)')
-      .run(id, filename, content, versionLabel ?? null);
-    return this.db.prepare('SELECT * FROM resumes WHERE id = ?').get(id) as Resume;
+    const now = new Date().toISOString();
+    const label = versionLabel ?? filename;
+
+    const noteFilename = `${this.adapter.sanitize(label)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote('Resumes', noteFilename, {
+      id,
+      type: 'athena-resume',
+      filename,
+      version_label: versionLabel ?? null,
+      ingested_at: now,
+      tags: ['athena', 'resume'],
+    }, `# Resume: ${label}\n\n${content}\n`);
+
+    return this.getResume(id)!;
+  }
+
+  private getResume(id: string): Resume | undefined {
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-resume') return undefined;
+    return this.resumeFromEntry(entry);
   }
 
   getAllResumes(): Resume[] {
-    return this.db.prepare('SELECT * FROM resumes ORDER BY ingested_at').all() as Resume[];
+    return this.adapter.findByType('athena-resume')
+      .map(e => this.resumeFromEntry(e))
+      .sort((a, b) => a.ingested_at.localeCompare(b.ingested_at));
   }
 
   getResumeCount(): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as count FROM resumes')
-      .get() as { count: number };
-    return row.count;
+    return this.adapter.findByType('athena-resume').length;
   }
 
   clearResumes(): void {
-    this.db.prepare('DELETE FROM resumes').run();
+    const resumes = this.adapter.findByType('athena-resume');
+    for (const entry of resumes) {
+      this.adapter.deleteNote(entry.relativePath);
+    }
   }
 
   // ── Job Descriptions ──────────────────────────────────────────────────
 
   addJobDescription(url: string, rawText: string): JobDescription {
     const id = uuidv4();
-    this.db
-      .prepare('INSERT INTO job_descriptions (id, url, raw_text) VALUES (?, ?, ?)')
-      .run(id, url, rawText);
-    return this.db.prepare('SELECT * FROM job_descriptions WHERE id = ?').get(id) as JobDescription;
+    const now = new Date().toISOString();
+
+    // Create a slug from the URL
+    let slug: string;
+    try {
+      const parsed = new URL(url);
+      slug = parsed.hostname + parsed.pathname;
+    } catch {
+      slug = url;
+    }
+    slug = this.adapter.sanitize(slug);
+
+    const filename = `${slug} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote('Job Descriptions', filename, {
+      id,
+      type: 'athena-jd',
+      url,
+      analysis: null,
+      fetched_at: now,
+      tags: ['athena', 'job-description'],
+    }, `# Job Description\n\n**URL:** ${url}\n\n## Raw Text\n\n${rawText}\n`);
+
+    return this.getJobDescription(id)!;
   }
 
   getJobDescription(id: string): JobDescription | undefined {
-    return this.db.prepare('SELECT * FROM job_descriptions WHERE id = ?').get(id) as
-      | JobDescription
-      | undefined;
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-jd') return undefined;
+    return this.jdFromEntry(entry);
   }
 
   updateJobDescriptionAnalysis(id: string, analysis: string): void {
-    this.db
-      .prepare('UPDATE job_descriptions SET analysis = ? WHERE id = ?')
-      .run(analysis, id);
+    const entry = this.adapter.findById(id);
+    if (!entry) return;
+
+    this.adapter.updateFrontmatter(entry.relativePath, {
+      analysis,
+    });
+
+    // Also append analysis to the body
+    const note = this.adapter.readNote(entry.relativePath);
+    if (note && !note.body.includes('## Analysis')) {
+      this.adapter.appendToBody(entry.relativePath, `## Analysis\n\n${analysis}\n`);
+    } else if (note) {
+      const newBody = note.body.replace(/## Analysis\n[\s\S]*$/, `## Analysis\n\n${analysis}\n`);
+      this.adapter.replaceBody(entry.relativePath, newBody);
+    }
   }
 
   getAllJobDescriptions(): JobDescription[] {
-    return this.db
-      .prepare('SELECT * FROM job_descriptions ORDER BY fetched_at')
-      .all() as JobDescription[];
+    return this.adapter.findByType('athena-jd')
+      .map(e => this.jdFromEntry(e))
+      .sort((a, b) => a.fetched_at.localeCompare(b.fetched_at));
+  }
+
+  // ── Private helpers ───────────────────────────────────────────────────────
+
+  private projectFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): Project {
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    // Description is in the body after the heading
+    let description = '';
+    if (note) {
+      const lines = note.body.split('\n');
+      // Skip the heading line(s) and empty lines after it
+      const descLines: string[] = [];
+      let pastHeading = false;
+      for (const line of lines) {
+        if (!pastHeading && line.startsWith('# ')) {
+          pastHeading = true;
+          continue;
+        }
+        if (pastHeading) {
+          descLines.push(line);
+        }
+      }
+      description = descLines.join('\n').trim();
+    }
+    return {
+      id: fm.id as string,
+      name: fm.name as string,
+      description,
+      directory: (fm.directory as string) ?? null,
+      phase: fm.phase as string,
+      created_at: fm.created_at as string,
+      updated_at: fm.updated_at as string,
+    };
+  }
+
+  private sessionFromEntry(entry: { frontmatter: Record<string, unknown> }): Session {
+    const fm = entry.frontmatter;
+    return {
+      id: fm.id as string,
+      project_id: (fm.project_id as string) ?? null,
+      phase: fm.phase as string,
+      created_at: fm.created_at as string,
+      updated_at: fm.updated_at as string,
+      summary: (fm.summary as string) ?? null,
+    };
+  }
+
+  private todoFromEntry(entry: { frontmatter: Record<string, unknown> }): Todo {
+    const fm = entry.frontmatter;
+    return {
+      id: fm.id as string,
+      project_id: fm.project_id as string,
+      title: fm.title as string,
+      status: fm.status as string,
+      priority: fm.priority as number,
+      created_at: fm.created_at as string,
+      completed_at: (fm.completed_at as string) ?? null,
+    };
+  }
+
+  private achievementFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): Achievement {
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    // Description is in the body after the heading
+    let description = '';
+    if (note) {
+      const lines = note.body.split('\n');
+      const descLines: string[] = [];
+      let pastHeading = false;
+      for (const line of lines) {
+        if (!pastHeading && line.startsWith('# ')) {
+          pastHeading = true;
+          continue;
+        }
+        if (pastHeading) {
+          descLines.push(line);
+        }
+      }
+      description = descLines.join('\n').trim();
+    }
+    return {
+      id: fm.id as string,
+      project_id: (fm.project_id as string) ?? null,
+      category: fm.category as string,
+      title: fm.title as string,
+      description,
+      evidence: (fm.evidence as string) ?? '[]',
+      tags: (fm.achievement_tags as string) ?? '[]',
+      created_at: fm.created_at as string,
+    };
+  }
+
+  private experienceFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): Experience {
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    // Description is in the body after heading and period line
+    let description = '';
+    if (note) {
+      const lines = note.body.split('\n');
+      const descLines: string[] = [];
+      let pastMeta = false;
+      for (const line of lines) {
+        if (line.startsWith('# ') || line.startsWith('**Period:**')) continue;
+        if (!pastMeta && line.trim() === '') {
+          pastMeta = true;
+          continue;
+        }
+        if (pastMeta) {
+          descLines.push(line);
+        }
+      }
+      description = descLines.join('\n').trim();
+    }
+    return {
+      id: fm.id as string,
+      company: fm.company as string,
+      role: fm.role as string,
+      period: fm.period as string,
+      description,
+      highlights: (fm.highlights as string) ?? '[]',
+      recruiter_insights: (fm.recruiter_insights as string) ?? '[]',
+      created_at: fm.created_at as string,
+      updated_at: fm.updated_at as string,
+    };
+  }
+
+  private resumeFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): Resume {
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    // Content is the body after the heading
+    let content = '';
+    if (note) {
+      const lines = note.body.split('\n');
+      const contentLines: string[] = [];
+      let pastHeading = false;
+      for (const line of lines) {
+        if (!pastHeading && line.startsWith('# ')) {
+          pastHeading = true;
+          continue;
+        }
+        if (pastHeading) {
+          contentLines.push(line);
+        }
+      }
+      content = contentLines.join('\n').trim();
+    }
+    return {
+      id: fm.id as string,
+      filename: fm.filename as string,
+      version_label: (fm.version_label as string) ?? null,
+      content,
+      ingested_at: fm.ingested_at as string,
+    };
+  }
+
+  private jdFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): JobDescription {
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    // raw_text is in the "## Raw Text" section
+    let rawText = '';
+    let analysis: string | null = (fm.analysis as string) ?? null;
+    if (note) {
+      const rawMatch = note.body.match(/## Raw Text\n\n([\s\S]*?)(?=\n## Analysis|$)/);
+      rawText = rawMatch?.[1]?.trim() ?? '';
+    }
+    return {
+      id: fm.id as string,
+      url: fm.url as string,
+      raw_text: rawText,
+      analysis,
+      fetched_at: fm.fetched_at as string,
+    };
   }
 }
