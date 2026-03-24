@@ -90,6 +90,26 @@ export interface Resume {
   ingested_at: string;
 }
 
+export interface SoftSkill {
+  id: string;
+  title: string;
+  description: string;
+  evidence: string;
+  source: string;
+  tags: string;
+  created_at: string;
+}
+
+export interface CoverLetter {
+  id: string;
+  job_id: string | null;
+  company: string;
+  role: string;
+  content: string;
+  version_label: string | null;
+  created_at: string;
+}
+
 // ── Message parsing helpers ─────────────────────────────────────────────────
 
 const MSG_TAG_RE = /<!-- msg:([^:]+):deleted=(\d) -->/;
@@ -143,6 +163,8 @@ export class AthenaDB {
     this.adapter.ensureFolder('Experiences');
     this.adapter.ensureFolder('Resumes');
     this.adapter.ensureFolder('Job Descriptions');
+    this.adapter.ensureFolder('Soft Skills');
+    this.adapter.ensureFolder('Cover Letters');
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -154,7 +176,7 @@ export class AthenaDB {
   // ── Introspection ───────────────────────────────────────────────────────
 
   listTables(): string[] {
-    return ['projects', 'sessions', 'messages', 'decisions', 'todos', 'achievements', 'experiences', 'resumes', 'job_descriptions'];
+    return ['projects', 'sessions', 'messages', 'decisions', 'todos', 'achievements', 'experiences', 'resumes', 'job_descriptions', 'soft_skills', 'cover_letters'];
   }
 
   // ── Projects ────────────────────────────────────────────────────────────
@@ -673,6 +695,101 @@ export class AthenaDB {
       .sort((a, b) => a.fetched_at.localeCompare(b.fetched_at));
   }
 
+  // ── Soft Skills ────────────────────────────────────────────────────────
+
+  addSoftSkill(
+    title: string,
+    description: string,
+    evidence: unknown[],
+    source: string,
+    tags: string[]
+  ): SoftSkill {
+    const id = uuidv4();
+    const now = new Date().toISOString();
+
+    const filename = `${this.adapter.sanitize(title)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote('Soft Skills', filename, {
+      id,
+      type: 'athena-soft-skill',
+      title,
+      evidence: JSON.stringify(evidence),
+      source,
+      soft_skill_tags: JSON.stringify(tags),
+      created_at: now,
+      tags: ['athena', 'soft-skill'],
+    }, `# ${title}\n\n${description}\n`);
+
+    return this.getSoftSkill(id)!;
+  }
+
+  getSoftSkill(id: string): SoftSkill | undefined {
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-soft-skill') return undefined;
+    return this.softSkillFromEntry(entry);
+  }
+
+  getAllSoftSkills(): SoftSkill[] {
+    return this.adapter.findByType('athena-soft-skill')
+      .map(e => this.softSkillFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  getSoftSkillsBySource(source: string): SoftSkill[] {
+    return this.adapter.findByType('athena-soft-skill')
+      .filter(e => e.frontmatter.source === source)
+      .map(e => this.softSkillFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  // ── Cover Letters ─────────────────────────────────────────────────────
+
+  addCoverLetter(
+    company: string,
+    role: string,
+    content: string,
+    jobId?: string,
+    versionLabel?: string
+  ): CoverLetter {
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    const label = versionLabel ?? `${company} - ${role}`;
+
+    const filename = `${this.adapter.sanitize(label)} - ${this.adapter.shortId(id)}.md`;
+
+    this.adapter.createNote('Cover Letters', filename, {
+      id,
+      type: 'athena-cover-letter',
+      job_id: jobId ?? null,
+      company,
+      role,
+      version_label: versionLabel ?? null,
+      created_at: now,
+      tags: ['athena', 'cover-letter'],
+    }, `# Cover Letter: ${label}\n\n${content}\n`);
+
+    return this.getCoverLetter(id)!;
+  }
+
+  getCoverLetter(id: string): CoverLetter | undefined {
+    const entry = this.adapter.findById(id);
+    if (!entry || entry.frontmatter.type !== 'athena-cover-letter') return undefined;
+    return this.coverLetterFromEntry(entry);
+  }
+
+  getAllCoverLetters(): CoverLetter[] {
+    return this.adapter.findByType('athena-cover-letter')
+      .map(e => this.coverLetterFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  getCoverLettersByCompany(company: string): CoverLetter[] {
+    return this.adapter.findByType('athena-cover-letter')
+      .filter(e => e.frontmatter.company === company)
+      .map(e => this.coverLetterFromEntry(e))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
   // ── Private helpers ───────────────────────────────────────────────────────
 
   private projectFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): Project {
@@ -843,6 +960,66 @@ export class AthenaDB {
       raw_text: rawText,
       analysis,
       fetched_at: fm.fetched_at as string,
+    };
+  }
+
+  private softSkillFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): SoftSkill {
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    let description = '';
+    if (note) {
+      const lines = note.body.split('\n');
+      const descLines: string[] = [];
+      let pastHeading = false;
+      for (const line of lines) {
+        if (!pastHeading && line.startsWith('# ')) {
+          pastHeading = true;
+          continue;
+        }
+        if (pastHeading) {
+          descLines.push(line);
+        }
+      }
+      description = descLines.join('\n').trim();
+    }
+    return {
+      id: fm.id as string,
+      title: fm.title as string,
+      description,
+      evidence: (fm.evidence as string) ?? '[]',
+      source: fm.source as string,
+      tags: (fm.soft_skill_tags as string) ?? '[]',
+      created_at: fm.created_at as string,
+    };
+  }
+
+  private coverLetterFromEntry(entry: { relativePath: string; frontmatter: Record<string, unknown> }): CoverLetter {
+    const fm = entry.frontmatter;
+    const note = this.adapter.readNote(entry.relativePath);
+    let content = '';
+    if (note) {
+      const lines = note.body.split('\n');
+      const contentLines: string[] = [];
+      let pastHeading = false;
+      for (const line of lines) {
+        if (!pastHeading && line.startsWith('# ')) {
+          pastHeading = true;
+          continue;
+        }
+        if (pastHeading) {
+          contentLines.push(line);
+        }
+      }
+      content = contentLines.join('\n').trim();
+    }
+    return {
+      id: fm.id as string,
+      job_id: (fm.job_id as string) ?? null,
+      company: fm.company as string,
+      role: fm.role as string,
+      content,
+      version_label: (fm.version_label as string) ?? null,
+      created_at: fm.created_at as string,
     };
   }
 }

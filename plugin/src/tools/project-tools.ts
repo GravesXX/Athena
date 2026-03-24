@@ -7,21 +7,30 @@ export function registerProjectTools(api: PluginAPI, manager: ProjectManager): v
     name: 'athena_project_create',
     description: 'Create a new project to track. Optionally link to a local directory for code scanning.',
     parameters: {
-      name: { type: 'string', description: 'Project name', required: true },
-      description: { type: 'string', description: 'What this project is about', required: true },
-      directory: { type: 'string', description: 'Absolute path to the project directory (optional)' },
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Project name' },
+        project_description: { type: 'string', description: 'What this project is about' },
+        directory: { type: 'string', description: 'Absolute path to the project directory (optional)' },
+      },
+      required: ['name', 'project_description'],
     },
-    execute: async (_id, params) => text(manager.create({
-      name: params.name as string,
-      description: params.description as string,
-      directory: params.directory as string | undefined,
-    })),
+    execute: async (_id, params) => {
+      const name = params.name as string | undefined;
+      const desc = params.project_description as string | undefined;
+      if (!name) return text({ content: '', error: 'Missing required parameter: name' });
+      if (!desc) return text({ content: '', error: 'Missing required parameter: project_description' });
+      return text(manager.create({ name, description: desc, directory: params.directory as string | undefined }));
+    },
   });
 
   api.registerTool({
     name: 'athena_project_list',
     description: 'List all projects grouped by phase (explore, build, harvest, completed)',
-    parameters: {},
+    parameters: {
+      type: 'object' as const,
+      properties: {},
+    },
     execute: async (_id, _params) => text(manager.list()),
   });
 
@@ -29,7 +38,11 @@ export function registerProjectTools(api: PluginAPI, manager: ProjectManager): v
     name: 'athena_project_open',
     description: 'Open a project by searching for it by name',
     parameters: {
-      query: { type: 'string', description: 'Search query to find the project by name', required: true },
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search query to find the project by name' },
+      },
+      required: ['query'],
     },
     execute: async (_id, params) => text(manager.open({ query: params.query as string })),
   });
@@ -38,7 +51,11 @@ export function registerProjectTools(api: PluginAPI, manager: ProjectManager): v
     name: 'athena_project_advance',
     description: 'Advance a project to the next phase (explore → build → harvest → completed)',
     parameters: {
-      project_id: { type: 'string', description: 'ID of the project to advance', required: true },
+      type: 'object' as const,
+      properties: {
+        project_id: { type: 'string', description: 'ID of the project to advance' },
+      },
+      required: ['project_id'],
     },
     execute: async (_id, params) => text(manager.advance({ project_id: params.project_id as string })),
   });
@@ -47,7 +64,11 @@ export function registerProjectTools(api: PluginAPI, manager: ProjectManager): v
     name: 'athena_project_scan',
     description: "Scan a project's linked directory for README, dependencies, git history, and file structure",
     parameters: {
-      project_id: { type: 'string', description: 'ID of the project to scan', required: true },
+      type: 'object' as const,
+      properties: {
+        project_id: { type: 'string', description: 'ID of the project to scan' },
+      },
+      required: ['project_id'],
     },
     execute: async (_id, params) => text(manager.scan({ project_id: params.project_id as string })),
   });

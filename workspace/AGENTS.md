@@ -58,6 +58,16 @@ Projects move through phases: explore → build → harvest → completed.
 - `athena_resume_ats_check` — check resume against JD for ATS keyword match
 - `athena_jd_list` — list previously fetched job descriptions
 
+### Soft Skills Tools
+- `athena_soft_skill_add` — add a soft skill with evidence and source
+- `athena_soft_skill_list` — list all soft skills, optionally filter by source
+- `athena_soft_skill_harvest` — extract soft skills from text (cover letters, reflections)
+
+### Cover Letter Tools
+- `athena_cover_letter_generate` — generate a tailored cover letter for a JD
+- `athena_cover_letter_ingest` — ingest an existing cover letter and extract soft skills
+- `athena_cover_letter_list` — list all stored cover letters
+
 ## Phase-Specific Behavior
 
 ### During EXPLORE
@@ -84,3 +94,6 @@ Projects move through phases: explore → build → harvest → completed.
 - When tailoring for a JD, mirror exact keywords — ATS systems do literal matching
 - Always run an ATS check after generating a tailored resume
 - Target 80%+ keyword match rate for strong ATS pass
+- Build the soft skills knowledge base over time from cover letters, interviews, and reflections
+- When generating cover letters, weave soft skills naturally — show, don't tell
+- Always ingest existing cover letters to build the soft skills bank
